@@ -257,6 +257,30 @@ def reorder_headers_only(ws):
             ws.cell(row=2, column=col_idx+j, value=val)
         col_idx += 4
 
+# ------------------ Validation sheet cleanup ------------------
+DATE_SHEET_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}(?:-\d{2}\.\d{2}\.\d{4})?$")
+
+def delete_old_validation_sheets(wb):
+    """
+    Delete any worksheet whose name looks like a date or a date range in the
+    format dd.mm.yyyy or dd.mm.yyyy-dd.mm.yyyy (your 'validation' sheets).
+    Keeps 'Master' and any other non-date sheets intact.
+    """
+    to_delete = [s for s in wb.sheetnames if DATE_SHEET_RE.match(s)]
+    for s in to_delete:
+        del wb[s]
+
+# ------------------ Next-date stamping ------------------
+def stamp_date_across_blocks(ws, row_idx: int, header_pos: dict, date_obj: dt.date, overwrite: bool = True):
+    """
+    Write the given date (as datetime) into the first column of every 4-col block
+    on the specified row. If overwrite=False, only fills blanks.
+    """
+    for _norm, (start_col, _hdr) in header_pos.items():
+        cell = ws.cell(row=row_idx, column=start_col)
+        if overwrite or (cell.value is None):
+            cell.value = dt.datetime.combine(date_obj, dt.time())
+
 # ------------------ Streamlit App ------------------
 st.title("Block Trades Parser")
 
@@ -303,6 +327,11 @@ if pdf_files and xlsx_file:
                 row_idx = find_or_create_date_row(ws, d)
                 fill_row(ws, row_idx, headers_map, trades_map, d)
 
+            # ✅ Also auto-create the *next* calendar date row and stamp its date across all blocks
+            next_date = max_date + dt.timedelta(days=1)
+            next_row_idx = find_or_create_date_row(ws, next_date)  # sets Column A
+            stamp_date_across_blocks(ws, next_row_idx, headers_map, next_date, overwrite=True)
+
             # ✅ Sorting if enabled
             if do_sort:
                 if sort_mode == "Fast (headers only)":
@@ -310,7 +339,8 @@ if pdf_files and xlsx_file:
                 else:
                     reorder_company_blocks(ws)
 
-            # ✅ One combined validation sheet
+            # ✅ One combined validation sheet — remove any older ones first
+            delete_old_validation_sheets(wb)
             write_pdf_sheet(wb, sheet_label, df_all, headers_map)
 
             output = BytesIO()
@@ -322,3 +352,4 @@ if pdf_files and xlsx_file:
                 file_name=f"Block Trades_updated as of {sheet_label}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+
